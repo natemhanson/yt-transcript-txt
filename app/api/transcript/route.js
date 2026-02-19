@@ -1,4 +1,4 @@
-import { YoutubeTranscript } from "youtube-transcript-plus";
+import { getVideoDetails } from "youtube-caption-extractor";
 
 export async function POST(request) {
   try {
@@ -8,16 +8,18 @@ export async function POST(request) {
       return Response.json({ error: "Invalid video ID" }, { status: 400 });
     }
 
-    // Fetch title and transcript in parallel
-    const [title, transcriptSegments] = await Promise.all([
-      fetchTitle(videoId),
-      YoutubeTranscript.fetchTranscript(videoId, { lang: "en" }).catch(() =>
-        // If English isn't available, fall back to any language
-        YoutubeTranscript.fetchTranscript(videoId)
-      ),
-    ]);
+    const details = await getVideoDetails({ videoID: videoId, lang: "en" });
 
-    const transcript = transcriptSegments
+    const title = details.title || "Unknown";
+
+    if (!details.subtitles || details.subtitles.length === 0) {
+      return Response.json(
+        { error: "No captions found for this video." },
+        { status: 404 }
+      );
+    }
+
+    const transcript = details.subtitles
       .map((seg) => seg.text)
       .join(" ")
       .replace(/\n/g, " ")
@@ -35,35 +37,9 @@ export async function POST(request) {
   } catch (err) {
     console.error("Transcript error:", err);
 
-    // Map library-specific errors to user-friendly messages
-    const message = err.name?.startsWith("YoutubeTranscript")
-      ? err.message
-      : err.message || "Internal server error";
-
-    const status =
-      err.name === "YoutubeTranscriptVideoUnavailableError"
-        ? 404
-        : err.name === "YoutubeTranscriptTooManyRequestError"
-          ? 429
-          : err.name?.startsWith("YoutubeTranscript")
-            ? 404
-            : 500;
+    const message = err.message || "Internal server error";
+    const status = message.includes("unavailable") ? 404 : 500;
 
     return Response.json({ error: message }, { status });
   }
-}
-
-async function fetchTitle(videoId) {
-  try {
-    const resp = await fetch(
-      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
-    );
-    if (resp.ok) {
-      const data = await resp.json();
-      return data.title || "Unknown";
-    }
-  } catch {
-    // oEmbed failed, not critical
-  }
-  return "Unknown";
 }
